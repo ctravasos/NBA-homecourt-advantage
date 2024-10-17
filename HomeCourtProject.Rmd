@@ -1,0 +1,942 @@
+---
+title: "Home Court"
+author: "Collin Travasos"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Packages
+```{r}
+library(httr) 
+library(rvest) 
+library(jsonlite) 
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+library(caret)
+library(tidyr)
+library(scales)
+library(xgboost)
+library(Metrics)
+library(randomForest)
+
+
+```
+
+
+Scrape attendance
+```{r}
+scrape_table <- function(url, year) {
+  table <- read_html(url) %>% 
+    html_node("table") %>% 
+    html_table() %>% 
+    mutate(Year = year) %>% 
+    select(Year, everything())
+  return(table)
+}
+
+urls <- c(
+  "https://www.espn.com/nba/attendance/_/year/2024",
+  "https://www.espn.com/nba/attendance/_/year/2023",
+  "https://www.espn.com/nba/attendance/_/year/2022",
+  "https://www.espn.com/nba/attendance/_/year/2021",
+  "https://www.espn.com/nba/attendance/_/year/2020",
+  "https://www.espn.com/nba/attendance/_/year/2019",
+  "https://www.espn.com/nba/attendance/_/year/2018",
+  "https://www.espn.com/nba/attendance/_/year/2017",
+  "https://www.espn.com/nba/attendance/_/year/2016",
+  "https://www.espn.com/nba/attendance/_/year/2015",
+  "https://www.espn.com/nba/attendance/_/year/2014",
+  "https://www.espn.com/nba/attendance/_/year/2013",
+  "https://www.espn.com/nba/attendance/_/year/2012",
+  "https://www.espn.com/nba/attendance/_/year/2011"
+)
+years <- c("2024", "2023", "2022", "2021", "2020", "2019", "2018", "2017", "2016", "2015", "2014", "2013", "2012", "2011")
+
+tables <- mapply(scrape_table, urls, years, SIMPLIFY = FALSE)
+espn_attendance_table <- bind_rows(tables)
+```
+
+
+Combine/clean attendance tables
+```{r}
+
+espn_attendance_table <- espn_attendance_table %>% 
+  filter(!X2 %in% c("East", "West", "Dur", "Leb", "Gia", "Ste", "Usa", "World")) %>% 
+  select(-X6, -X9, -X12 ) %>% 
+  mutate_all(~ replace(., . == 0, NA))
+
+colnames(espn_attendance_table) <- 
+  c("Year", "Season_Rank", "Team", "Home_Games", "Home_Total", "Home_Average", "Road_Games", "Road_Average", "Overall_Games", "Overall_Average" )
+
+espn_attendance_table <- espn_attendance_table %>% 
+  filter(!Home_Games %in% c("Home", "GMS"))
+
+espn_attendance_table$Team <- gsub("76ers", "Sixers", espn_attendance_table$Team)
+espn_attendance_table$Team <- gsub("Mavericks", "Mavs", espn_attendance_table$Team)
+espn_attendance_table$Team <- gsub("Cavaliers", "Cavs", espn_attendance_table$Team)
+espn_attendance_table$Team <- gsub("NY Knicks", "Knicks", espn_attendance_table$Team)
+espn_attendance_table$Team <- gsub("Trail Blazers", "Blazers", espn_attendance_table$Team)
+
+espn_attendance_table <- espn_attendance_table %>%
+  mutate(Team_Year = paste0(Team, Year)) %>%
+  select(Team_Year, everything())
+```
+
+Results
+```{r}
+scrape_standings <- function(url, year) {
+  espn <- read_html(url)
+  tables <- espn %>% 
+    html_nodes("table") %>% 
+    html_table()
+  
+tableT <- tables[[1]]
+tableR <- tables[[2]]
+  
+combined_table <- cbind(tableT, tableR) %>% 
+    mutate(Year = year) %>% 
+    select(Year, everything())
+  
+  return(combined_table)
+}
+
+urls <- c(
+  "https://www.espn.com/nba/standings/_/season/2024/group/league",
+  "https://www.espn.com/nba/standings/_/season/2023/group/league",
+  "https://www.espn.com/nba/standings/_/season/2022/group/league",
+  "https://www.espn.com/nba/standings/_/season/2021/group/league",
+  "https://www.espn.com/nba/standings/_/season/2020/group/league",
+  "https://www.espn.com/nba/standings/_/season/2019/group/league",
+  "https://www.espn.com/nba/standings/_/season/2018/group/league",
+  "https://www.espn.com/nba/standings/_/season/2017/group/league",
+  "https://www.espn.com/nba/standings/_/season/2016/group/league",
+  "https://www.espn.com/nba/standings/_/season/2015/group/league",
+  "https://www.espn.com/nba/standings/_/season/2014/group/league",
+  "https://www.espn.com/nba/standings/_/season/2013/group/league",
+  "https://www.espn.com/nba/standings/_/season/2012/group/league",
+  "https://www.espn.com/nba/standings/_/season/2011/group/league"
+)
+
+years <- c("2024", "2023", "2022", "2021", "2020", "2019", "2018", "2017", "2016", "2015", "2014", "2013", "2012", "2011")
+
+standings_tables <- mapply(scrape_standings, urls, years, SIMPLIFY = FALSE)
+espn_results_table <- bind_rows(standings_tables)
+
+```
+
+Combine/Clean Results Data
+```{r}
+espn_results_table <- espn_results_table %>% 
+  rename(Team = Var.1)
+
+espn_results_table$Team <- sub(".*--", "", espn_results_table$Team)
+
+espn_results_table$Team <- sub("^[A-Z]+", "", espn_results_table$Team)
+espn_results_table$Team <- sub(".* ", "", espn_results_table$Team)
+
+espn_results_table$Team <- gsub("76ers", "Sixers", espn_results_table$Team)
+espn_results_table$Team <- gsub("Mavericks", "Mavs", espn_results_table$Team)
+espn_results_table$Team <- gsub("Cavaliers", "Cavs", espn_results_table$Team)
+
+espn_results_table <- espn_results_table %>%
+  mutate(Team_Year = paste0(Team, Year)) %>%
+  select(Team_Year, everything())
+```
+
+Ticket sales data from statista
+```{r}
+
+Hawks <- read.csv("C:/Users/cstra/Downloads/NBA_Gate_Reciepts_Statista/Hawks.csv") %>% 
+  mutate(new_column = "Hawks") 
+colnames(Hawks) <- c("Season", "Dollars", "Team")
+
+Celtics <- read.csv("C:/Users/cstra/Downloads/NBA_Gate_Reciepts_Statista/Celtics.csv") %>% 
+  mutate(new_column = "Celtics") 
+colnames(Celtics) <- c("Season", "Dollars", "Team")
+
+Nets <- read.csv("C:/Users/cstra/Downloads/NBA_Gate_Reciepts_Statista/Nets.csv") %>% 
+  mutate(new_column = "Nets") 
+colnames(Nets) <- c("Season", "Dollars", "Team")
+
+Hornets <- read.csv("C:/Users/cstra/Downloads/NBA_Gate_Reciepts_Statista/Hornets.csv") %>% 
+  mutate(new_column = "Hornets") 
+colnames(Hornets) <- c("Season", "Dollars", "Team")
+
+Bulls <- read.csv("C:/Users/cstra/Downloads/NBA_Gate_Reciepts_Statista/Bulls.csv")%>% 
+  mutate(new_column = "Bulls") 
+colnames(Bulls) <- c("Season", "Dollars", "Team")
+
+Cavs <- read.csv("C:/Users/cstra/Downloads/NBA_Gate_Reciepts_Statista/Cavs.csv")%>% 
+  mutate(new_column = "Cavs") 
+colnames(Cavs) <- c("Season", "Dollars", "Team")
+
+Mavs <- read.csv("C:/Users/cstra/Downloads/NBA_Gate_Reciepts_Statista/Mavs.csv")%>% 
+  mutate(new_column = "Mavs") 
+colnames(Mavs) <- c("Season", "Dollars", "Team")
+
+Nuggets <- read.csv("C:/Users/cstra/Downloads/NBA_Gate_Reciepts_Statista/Nuggets.csv") %>% 
+  mutate(new_column = "Nuggets") 
+colnames(Nuggets) <- c("Season", "Dollars", "Team")
+
+Pistons <- read.csv("C:/Users/cstra/Downloads/NBA_Gate_Reciepts_Statista/Pistons.csv")%>% 
+  mutate(new_column = "Pistons") 
+colnames(Pistons) <- c("Season", "Dollars", "Team")
+
+Warriors <- read.csv("C:/Users/cstra/Downloads/NBA_Gate_Reciepts_Statista/Warriors.csv")%>% 
+  mutate(new_column = "Warriors") 
+colnames(Warriors) <- c("Season", "Dollars", "Team")
+
+Rockets <- read.csv("C:/Users/cstra/Downloads/NBA_Gate_Reciepts_Statista/Rockets.csv")%>% 
+  mutate(new_column = "Rockets") 
+colnames(Rockets) <- c("Season", "Dollars", "Team")
+
+Pacers <- read.csv("C:/Users/cstra/Downloads/NBA_Gate_Reciepts_Statista/Pacers.csv")%>% 
+  mutate(new_column = "Pacers") 
+colnames(Pacers) <- c("Season", "Dollars", "Team")
+
+Clippers <- read.csv("C:/Users/cstra/Downloads/NBA_Gate_Reciepts_Statista/Clippers.csv")%>% 
+  mutate(new_column = "Clippers") 
+colnames(Clippers) <- c("Season", "Dollars", "Team")
+
+Lakers <- read.csv("C:/Users/cstra/Downloads/NBA_Gate_Reciepts_Statista/Lakers.csv")%>% 
+  mutate(new_column = "Lakers") 
+colnames(Lakers) <- c("Season", "Dollars", "Team")
+
+Grizzlies <- read.csv("C:/Users/cstra/Downloads/NBA_Gate_Reciepts_Statista/Grizzlies.csv")%>% 
+  mutate(new_column = "Grizzlies") 
+colnames(Grizzlies) <- c("Season", "Dollars", "Team")
+
+Heat <- read.csv("C:/Users/cstra/Downloads/NBA_Gate_Reciepts_Statista/Heat.csv")%>% 
+  mutate(new_column = "Heat") 
+colnames(Heat) <- c("Season", "Dollars", "Team")
+
+Bucks <- read.csv("C:/Users/cstra/Downloads/NBA_Gate_Reciepts_Statista/Bucks.csv")%>% 
+  mutate(new_column = "Bucks") 
+colnames(Bucks) <- c("Season", "Dollars", "Team")
+
+Timberwolves <- read.csv("C:/Users/cstra/Downloads/NBA_Gate_Reciepts_Statista/Timberwolves.csv")%>% 
+  mutate(new_column = "Timberwolves") 
+colnames(Timberwolves) <- c("Season", "Dollars", "Team")
+
+Pelicans <- read.csv("C:/Users/cstra/Downloads/NBA_Gate_Reciepts_Statista/Pelicans.csv")%>% 
+  mutate(new_column = "Pelicans") 
+colnames(Pelicans) <- c("Season", "Dollars", "Team")
+
+Knicks <- read.csv("C:/Users/cstra/Downloads/NBA_Gate_Reciepts_Statista/Knicks.csv")%>% 
+  mutate(new_column = "Knicks") 
+colnames(Knicks) <- c("Season", "Dollars", "Team")
+
+Thunder <- read.csv("C:/Users/cstra/Downloads/NBA_Gate_Reciepts_Statista/Thunder.csv")%>% 
+  mutate(new_column = "Thunder") 
+colnames(Thunder) <- c("Season", "Dollars", "Team")
+
+Magic <- read.csv("C:/Users/cstra/Downloads/NBA_Gate_Reciepts_Statista/Magic.csv")%>% 
+  mutate(new_column = "Magic") 
+colnames(Magic) <- c("Season", "Dollars", "Team")
+
+Sixers <- read.csv("C:/Users/cstra/Downloads/NBA_Gate_Reciepts_Statista/Sixers.csv")%>% 
+  mutate(new_column = "Sixers") 
+colnames(Sixers) <- c("Season", "Dollars", "Team")
+
+Suns <- read.csv("C:/Users/cstra/Downloads/NBA_Gate_Reciepts_Statista/Suns.csv")%>% 
+  mutate(new_column = "Suns") 
+colnames(Suns) <- c("Season", "Dollars", "Team")
+
+Blazers <- read.csv("C:/Users/cstra/Downloads/NBA_Gate_Reciepts_Statista/Blazers.csv")%>% 
+  mutate(new_column = "Blazers") 
+colnames(Blazers) <- c("Season", "Dollars", "Team")
+
+Kings <- read.csv("C:/Users/cstra/Downloads/NBA_Gate_Reciepts_Statista/Kings.csv")%>% 
+  mutate(new_column = "Kings") 
+colnames(Kings) <- c("Season", "Dollars", "Team")
+
+Spurs <- read.csv("C:/Users/cstra/Downloads/NBA_Gate_Reciepts_Statista/Spurs.csv")%>% 
+  mutate(new_column = "Spurs") 
+colnames(Spurs) <- c("Season", "Dollars", "Team")
+
+Raptors <- read.csv("C:/Users/cstra/Downloads/NBA_Gate_Reciepts_Statista/Raptors.csv")%>% 
+  mutate(new_column = "Raptors") 
+colnames(Raptors) <- c("Season", "Dollars", "Team")
+
+Jazz <- read.csv("C:/Users/cstra/Downloads/NBA_Gate_Reciepts_Statista/Jazz.csv")%>% 
+  mutate(new_column = "Jazz") 
+colnames(Jazz) <- c("Season", "Dollars", "Team")
+
+Wizards <- read.csv("C:/Users/cstra/Downloads/NBA_Gate_Reciepts_Statista/Wizards.csv")%>% 
+  mutate(new_column = "Wizards") 
+colnames(Wizards) <- c("Season", "Dollars", "Team")
+
+
+```
+
+Organize/clean ticket sales
+```{r}
+statista_attendance_data <- bind_rows(Hawks, Celtics, Nets, Hornets, Bulls, Cavs, Mavs, Nuggets, Pistons, Warriors, Rockets, Pacers, Clippers, Lakers, Grizzlies, Heat, Bucks, Timberwolves, Pelicans, Knicks, Thunder, Magic, Sixers, Suns, Blazers, Kings, Spurs, Raptors, Jazz, Wizards)
+
+
+statista_attendance_data$Dollars <- statista_attendance_data$Dollars * 1000000
+statista_attendance_data$Dollars <- format(statista_attendance_data$Dollars, scientific = FALSE)
+
+statista_attendance_data <- statista_attendance_data %>%
+  mutate(Season = sapply(strsplit(as.character(Season), "/"), function(x) paste0("20", x[2])))
+
+statista_attendance_data <- statista_attendance_data %>% 
+  filter(Season != "2011 to 2022" & Season != "20NA")
+  
+statista_attendance_data <- statista_attendance_data %>% rename(Year = Season)
+statista_attendance_data <- statista_attendance_data %>% rename(Gate_Receipts = Dollars)
+
+
+
+statista_attendance_data <- statista_attendance_data %>%
+  mutate(Team_Year = paste0(Team, Year)) %>%
+  select(Team_Year, everything())
+```
+
+
+Combine 3 data sets
+```{r}
+
+hc_combined_dataset <- statista_attendance_data %>%
+  inner_join(espn_attendance_table, by = "Team_Year") %>%
+  inner_join(espn_results_table, by = "Team_Year")
+
+```
+
+Clean 
+```{r}
+
+hc_combined_dataset <- hc_combined_dataset %>% 
+  select(-c(Year.y, Team.y, Year.x, Team.x)) 
+
+hc_combined_dataset <- hc_combined_dataset %>%
+  separate(HOME, into = c("Home_Wins", "Home_Losses"), sep = "\\s*-\\s*") %>%
+  mutate(Home_Wins = as.numeric(Home_Wins),
+         Home_Losses = as.numeric(Home_Losses),
+         Home_Win_Percentage = Home_Wins / (Home_Wins + Home_Losses)) #%>%
+
+hc_combined_dataset <- hc_combined_dataset %>%
+  mutate(Home_Average = as.numeric(gsub(",", "", Home_Average)),
+         Home_Total = as.numeric(gsub(",", "", Home_Total)),
+         Gate_Receipts = as.numeric(gsub(",", "", Gate_Receipts)))
+
+hc_combined_dataset <- hc_combined_dataset %>%
+  filter(Year != "2021")
+
+
+hc_combined_dataset <- hc_combined_dataset %>%
+  mutate(Gate_Receipts = format(as.numeric(Gate_Receipts), scientific = FALSE))
+
+hc_combined_dataset <- hc_combined_dataset %>%
+  mutate(Home_Win_Loss = ifelse(Home_Wins > Home_Losses, 1, 0))
+
+
+
+summary(hc_combined_dataset)
+
+```
+
+Visualizations
+```{r}
+
+g1 <- ggplot(hc_combined_dataset, aes(x = Year, y = Gate_Receipts)) +
+  geom_line() +
+  geom_point() +
+  labs(title = "Gate Receipts by Year",
+       x = "Year",
+       y = "Gate Receipts") +
+  theme_minimal()
+
+g2 <- ggplot(hc_combined_dataset, aes(x = Year, y = Home_Total)) +
+  geom_line() +
+  geom_point() +
+  labs(title = "Home Total Attendance by Year",
+       x = "Year",
+       y = "Home Total Attendance") +
+  theme_minimal()
+
+g3 <- ggplot(hc_combined_dataset, aes(x = PCT, y = Home_Average)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE) +
+  labs(title = "Home Average Attendance vs. Winning Percentage",
+       x = "Winning Percentage",
+       y = "Home Average Attendance") +
+  theme_minimal()
+
+g4 <- ggplot(hc_combined_dataset, aes(x = Home_Average, y = Gate_Receipts)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE) +
+  labs(title = "Gate Receipts vs. Home Average Attendance",
+       x = "Home Average Attendance",
+       y = "Gate Receipts") +
+  theme_minimal()
+
+g5 <- ggplot(hc_combined_dataset, aes(x = reorder(Team, PCT), y = PCT)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  labs(title = "Winning Percentage by Team",
+       x = "Team",
+       y = "Winning Percentage") +
+  theme_minimal()
+
+g1
+g2
+g3
+g4
+g5
+```
+
+More Viz
+```{r}
+
+
+# Visualization 1: Gate Receipts by Team
+v1 <- ggplot(hc_combined_dataset, aes(x = Team, y = Gate_Receipts)) +
+  geom_bar(stat = "identity") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  labs(title = "Gate Receipts by Team", x = "Team", y = "Gate Receipts")
+
+# Visualization 2: Home Win Percentage by Team
+v2 <- ggplot(hc_combined_dataset, aes(x = Team, y = Home_Win_Percentage)) +
+  geom_bar(stat = "identity", fill = "skyblue") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  labs(title = "Home Win Percentage by Team", x = "Team", y = "Win Percentage")
+
+# Visualization 3: Home Average Attendance by Team
+v3 <- ggplot(hc_combined_dataset, aes(x = Team, y = Home_Average)) +
+  geom_bar(stat = "identity", fill = "lightgreen") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  labs(title = "Home Average Attendance by Team", x = "Team", y = "Home Average")
+
+# Visualization 4: Scatter Plot of Gate Receipts vs. Home Average
+v4 <- ggplot(hc_combined_dataset, aes(x = Home_Average, y = Gate_Receipts)) +
+  geom_point() +
+  geom_smooth(method = "lm", col = "red") +
+  labs(title = "Gate Receipts vs. Home Average", x = "Home Average", y = "Gate Receipts")
+
+# Visualization 5: Scatter Plot of Gate Receipts vs. Home Win Percentage
+v5 <- ggplot(hc_combined_dataset, aes(x = Home_Win_Percentage, y = Gate_Receipts)) +
+  geom_point() +
+  geom_smooth(method = "lm", col = "blue") +
+  labs(title = "Gate Receipts vs. Home Win Percentage", x = "Home Win Percentage", y = "Gate Receipts")
+
+# Visualization 6: Boxplot of Gate Receipts by Team
+v6 <- ggplot(hc_combined_dataset, aes(x = Team, y = Gate_Receipts)) +
+  geom_boxplot() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  labs(title = "Distribution of Gate Receipts by Team", x = "Team", y = "Gate Receipts")
+
+# Visualization 7: Boxplot of Home Average Attendance by Team
+v7 <- ggplot(hc_combined_dataset, aes(x = Team, y = Home_Average)) +
+  geom_boxplot(fill = "orange") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  labs(title = "Distribution of Home Average Attendance by Team", x = "Team", y = "Home Average")
+
+# Visualization 8: Line Plot of Home Win Percentage Over Time
+v8 <- ggplot(hc_combined_dataset, aes(x = Year, y = Home_Win_Percentage, group = Team, color = Team)) +
+  geom_line() +
+  labs(title = "Home Win Percentage Over Time", x = "Year", y = "Home Win Percentage")
+
+# Visualization 9: Bar Plot of Home Win Percentage Grouped by Year
+v9 <- ggplot(hc_combined_dataset, aes(x = Year, y = Home_Win_Percentage, fill = Team)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Home Win Percentage Grouped by Year", x = "Year", y = "Home Win Percentage")
+
+# Visualization 10: Heatmap of Home Win Percentage by Team and Year
+v10 <- ggplot(hc_combined_dataset, aes(x = Year, y = Team, fill = Home_Win_Percentage)) +
+  geom_tile() +
+  scale_fill_gradient(low = "white", high = "red") +
+  labs(title = "Heatmap of Home Win Percentage", x = "Year", y = "Team", fill = "Win %")
+
+# Display the visualizations
+v1
+v2
+v3
+v4
+v5
+v6
+v7
+v8
+v9
+v10
+
+```
+
+moooooorrrreeeeeee
+```{r}
+
+
+# Ensure Gate_Receipts are numeric
+hc_combined_dataset <- hc_combined_dataset %>%
+  mutate(Gate_Receipts = as.numeric(Gate_Receipts))
+
+# Scatterplot of Gate Receipts vs. Home Average
+plot1 <- ggplot(hc_combined_dataset, aes(x = Home_Average, y = Gate_Receipts)) +
+  geom_point() +
+  geom_smooth(method = "lm", col = "blue") +
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 10)) +
+  scale_y_continuous(labels = function(x) paste0(x / 1e6, " Million")) +
+  labs(title = "Gate Receipts vs. Home Average", x = "Home Average", y = "Gate Receipts")
+
+# Scatterplot of Gate Receipts vs. Home Total
+plot2 <- ggplot(hc_combined_dataset, aes(x = Home_Total, y = Gate_Receipts)) +
+  geom_point() +
+  geom_smooth(method = "lm", col = "green") +
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 10)) +
+  scale_y_continuous(labels = function(x) paste0(x / 1e6, " Million")) +
+  labs(title = "Gate Receipts vs. Home Total", x = "Home Total", y = "Gate Receipts")
+
+# Scatterplot of Gate Receipts vs. Home Win Percentage
+plot3 <- ggplot(hc_combined_dataset, aes(x = Home_Win_Percentage, y = Gate_Receipts)) +
+  geom_point() +
+  geom_smooth(method = "lm", col = "red") +
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 10)) +
+  scale_y_continuous(labels = function(x) paste0(x / 1e6, " Million")) +
+  labs(title = "Gate Receipts vs. Home Win Percentage", x = "Home Win Percentage", y = "Gate Receipts")
+
+# Scatterplot of Home Average vs. Home Win Percentage
+plot4 <- ggplot(hc_combined_dataset, aes(x = Home_Average, y = Home_Win_Percentage)) +
+  geom_point() +
+  geom_smooth(method = "lm", col = "purple") +
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 10)) +
+  scale_y_continuous(breaks = scales::pretty_breaks(n = 10)) +
+  labs(title = "Home Average vs. Home Win Percentage", x = "Home Average", y = "Home Win Percentage")
+
+# Scatterplot of Home Total vs. Home Win Percentage
+plot5 <- ggplot(hc_combined_dataset, aes(x = Home_Total, y = Home_Win_Percentage)) +
+  geom_point() +
+  geom_smooth(method = "lm", col = "orange") +
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 10)) +
+  scale_y_continuous(breaks = scales::pretty_breaks(n = 10)) +
+  labs(title = "Home Total vs. Home Win Percentage", x = "Home Total", y = "Home Win Percentage")
+
+# Display the plots
+plot1
+plot2
+plot3
+plot4
+plot5
+
+
+
+```
+
+
+
+Model Time
+
+Linear Regression
+```{r}
+
+reg1 <- lm(Home_Win_Percentage ~ Home_Total, data = hc_combined_dataset)
+reg2 <- lm(Home_Win_Percentage ~ Gate_Receipts, data = hc_combined_dataset)
+reg3 <- lm(Home_Win_Percentage ~ Home_Total + Gate_Receipts, data = hc_combined_dataset)
+reg4 <- lm(Home_Total ~ Gate_Receipts, data = hc_combined_dataset)
+reg5 <- lm(Gate_Receipts ~ Home_Total, data = hc_combined_dataset)
+reg6 <- lm(Home_Total ~ Gate_Receipts + PCT, data = hc_combined_dataset)
+reg7 <- lm(Gate_Receipts ~ Home_Total + PCT, data = hc_combined_dataset)
+
+summary(reg1)
+summary(reg2)
+summary(reg3)
+summary(reg4)
+#summary(reg5)
+#summary(reg6)
+#summary(reg7)
+
+
+```
+
+
+
+
+
+Logistic Regression
+```{r}
+log_reg1 <- glm(Home_Win_Loss ~ Home_Total, data = hc_combined_dataset, family = binomial)
+log_reg2 <- glm(Home_Win_Loss ~ Gate_Receipts, data = hc_combined_dataset, family = binomial)
+log_reg3 <- glm(Home_Win_Loss ~ Home_Total + Gate_Receipts, data = hc_combined_dataset, family = binomial)
+
+summary(log_reg1)
+summary(log_reg2)
+summary(log_reg3)
+
+
+```
+
+Random Forest
+```{r}
+
+hc_combined_dataset$Home_Win_Loss <- as.factor(hc_combined_dataset$Home_Win_Loss)
+
+rf1 <- randomForest(Home_Win_Loss ~ Home_Total, data = hc_combined_dataset, ntree = 500)
+rf2 <- randomForest(Home_Win_Loss ~ Gate_Receipts, data = hc_combined_dataset, ntree = 500)
+rf3 <- randomForest(Home_Win_Loss ~ Home_Total + Gate_Receipts, data = hc_combined_dataset, ntree = 500)
+
+print(rf1)
+print(rf2)
+print(rf3)
+
+```
+RF split data
+
+```{r}
+set.seed(99)
+
+
+
+train_index_rf <- createDataPartition(hc_combined_dataset$Home_Win_Loss, p = 0.8, list = FALSE)
+train_data_rf <- hc_combined_dataset[train_index_rf, ]
+test_data_rf <- hc_combined_dataset[-train_index_rf, ]
+
+control <- trainControl(method = "cv", number = 5, search = "grid")
+
+grid <- expand.grid(mtry = c(1, 2))
+
+rf_grid <- train(Home_Win_Loss ~ Home_Total + Gate_Receipts, data = train_data_rf,
+                 method = "rf",
+                 trControl = control,
+                 tuneGrid = grid,
+                 ntree = 500)  # Added ntree parameter here
+
+
+
+pred <- predict(rf_grid, test_data_rf)
+
+conf_matrix <- confusionMatrix(pred, test_data_rf$Home_Win_Loss)
+print(conf_matrix)
+
+
+```
+
+XG Boost
+Binary
+```{r}
+
+
+set.seed(99)
+train_index_xg <- createDataPartition(hc_combined_dataset$Home_Win_Loss, p = 0.8, list = FALSE)
+train_data_xg <- hc_combined_dataset[train_index_xg, ]
+test_data_xg <- hc_combined_dataset[-train_index_xg, ]
+
+train_matrix <- xgb.DMatrix(data = as.matrix(train_data_xg[, c("Home_Total", "Gate_Receipts")]), label = train_data_xg$Home_Win_Loss)
+test_matrix <- xgb.DMatrix(data = as.matrix(test_data_xg[, c("Home_Total", "Gate_Receipts")]), label = test_data_xg$Home_Win_Loss)
+
+params <- list(
+  booster = "gbtree",
+  objective = "binary:logistic",
+  eta = 0.05,
+  max_depth = 10,
+  eval_metric = "error"
+)
+
+xgb_model <- xgboost(data = train_matrix, nrounds = 500, verbose = 1, print_every_n = 50)
+
+pred <- predict(xgb_model, test_matrix)
+pred_label <- ifelse(pred > 0.5, 1, 0)
+
+conf_matrix <- confusionMatrix(as.factor(pred_label), as.factor(test_data_xg$Home_Win_Loss))
+print(conf_matrix)
+
+```
+
+Regression
+```{r}
+
+
+set.seed(99)
+train_index_xg <- createDataPartition(hc_combined_dataset$Home_Win_Percentage, p = 0.8, list = FALSE)
+train_data_xg <- hc_combined_dataset[train_index_xg, ]
+test_data_xg <- hc_combined_dataset[-train_index_xg, ]
+
+train_matrix <- xgb.DMatrix(data = as.matrix(train_data_xg[, c("Home_Total", "Gate_Receipts")]), label = train_data_xg$Home_Win_Percentage)
+test_matrix <- xgb.DMatrix(data = as.matrix(test_data_xg[, c("Home_Total", "Gate_Receipts")]), label = test_data_xg$Home_Win_Percentage)
+
+params <- list(
+  booster = "gbtree",
+  objective = "reg:squarederror",
+  eta = 0.05,
+  max_depth = 10,
+  subsample = 0.8,
+  colsample_bytree = 0.8,
+  alpha = 0.1, # L1 regularization term
+  lambda = 0.1, # L2 regularization term
+  eval_metric = "rmse"
+)
+
+cv <- xgb.cv(
+  params = params,
+  data = train_matrix,
+  nrounds = 1000,
+  nfold = 5,
+  showsd = TRUE,
+  stratified = TRUE,
+  print_every_n = 50,
+  early_stopping_rounds = 10,
+  maximize = FALSE
+)
+
+best_nrounds <- cv$best_iteration
+xgb_model <- xgboost(
+  data = train_matrix,
+  params = params,
+  nrounds = best_nrounds,
+  verbose = 1,
+  print_every_n = 50
+)
+
+pred <- predict(xgb_model, test_matrix)
+
+actual <- test_data_xg$Home_Win_Percentage
+rmse_value <- rmse(actual, pred)
+cat("RMSE: ", rmse_value, "\n")
+
+rmse_value
+
+```
+
+
+
+GRAAAAAPPPHHHSSSSSS
+
+```{r}
+
+agg_data <- aggregate(Home_Win_Percentage ~ Team, data = hc_combined_dataset, mean)
+
+ggplot(agg_data, aes(x = Team, y = Home_Win_Percentage)) +
+  geom_bar(stat = "identity", fill = "skyblue") +
+  labs(title = "Teams' Average Home Win Percentage",
+       x = "Team",
+       y = "Average Home Win Percentage") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+```
+
+
+
+```{r}
+agg_data <- aggregate(Home_Win_Percentage ~ Team, data = hc_combined_dataset, mean)
+agg_data <- agg_data[order(-agg_data$Home_Win_Percentage), ]  # Sort in descending order
+
+ggplot(agg_data, aes(x = reorder(Team, -Home_Win_Percentage), y = Home_Win_Percentage)) +
+  geom_bar(stat = "identity", fill = "skyblue") +
+  labs(title = "Teams' Average Home Win Percentage",
+       x = "Team",
+       y = "Average Home Win Percentage") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+
+```{r}
+agg_data <- aggregate(PCT ~ Team, data = hc_combined_dataset, mean)
+agg_data <- agg_data[order(-agg_data$PCT), ]  # Sort in descending order
+
+ggplot(agg_data, aes(x = reorder(Team, -PCT), y = PCT)) +
+  geom_bar(stat = "identity", fill = "skyblue") +
+  labs(title = "Teams' Average Win Percentage",
+       x = "Team",
+       y = "Average Win Percentage (PCT)") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+```{r}
+agg_data <- aggregate(cbind(Home_Win_Percentage, PCT) ~ Team, data = hc_combined_dataset, mean)
+
+agg_data$Difference <- agg_data$Home_Win_Percentage - agg_data$PCT
+
+ggplot(agg_data, aes(x = reorder(Team, -Difference), y = Difference)) +
+  geom_bar(stat = "identity", fill = "lightcoral") +
+  labs(title = "Difference Between Home Win Percentage and Win Percentage (PCT)",
+       x = "Team",
+       y = "Difference") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+```{r}
+
+agg_data1 <- aggregate(Home_Win_Percentage ~ Team, data = hc_combined_dataset, mean)
+agg_data2 <- aggregate(PCT ~ Team, data = hc_combined_dataset, mean)
+agg_data3 <- aggregate(cbind(Home_Win_Percentage, PCT) ~ Team, data = hc_combined_dataset, mean)
+agg_data4 <- aggregate(Home_Total ~ Gate_Receipts, data = hc_combined_dataset, mean)
+agg_data5 <- aggregate(Gate_Receipts ~ Home_Total, data = hc_combined_dataset, mean)
+#agg_data6 <- aggregate(Home_Total ~ cbind(Gate_Receipts, PCT), data = hc_combined_dataset, mean)
+#agg_data7 <- aggregate(Gate_Receipts ~ cbind(Home_Total, PCT), data = hc_combined_dataset, mean)
+
+p1 <- ggplot(hc_combined_dataset, aes(x = Home_Total, y = Home_Win_Percentage)) +
+  geom_point() +
+  geom_smooth(method = "lm", col = "red") +
+  labs(title = "Linear Regression: Home Win Percentage vs. Home Total",
+       x = "Home Total",
+       y = "Home Win Percentage") +
+  theme_minimal()
+
+p2 <- ggplot(hc_combined_dataset, aes(x = Gate_Receipts, y = Home_Win_Percentage)) +
+  geom_point() +
+  geom_smooth(method = "lm", col = "red") +
+  labs(title = "Linear Regression: Home Win Percentage vs. Gate Receipts",
+       x = "Gate Receipts",
+       y = "Home Win Percentage") +
+  theme_minimal()
+
+p3 <- ggplot(hc_combined_dataset, aes(x = Home_Total + Gate_Receipts, y = Home_Win_Percentage)) +
+  geom_point() +
+  geom_smooth(method = "lm", col = "red") +
+  labs(title = "Linear Regression: Home Win Percentage vs. Home Total + Gate Receipts",
+       x = "Home Total + Gate Receipts",
+       y = "Home Win Percentage") +
+  theme_minimal()
+
+p4 <- ggplot(hc_combined_dataset, aes(x = Gate_Receipts, y = Home_Total)) +
+  geom_point() +
+  geom_smooth(method = "lm", col = "blue") +
+  labs(title = "Linear Regression: Home Total vs. Gate Receipts",
+       x = "Gate Receipts",
+       y = "Home Total") +
+  theme_minimal()
+
+p5 <- ggplot(hc_combined_dataset, aes(x = Home_Total, y = Gate_Receipts)) +
+  geom_point() +
+  geom_smooth(method = "lm", col = "blue") +
+  labs(title = "Linear Regression: Gate Receipts vs. Home Total",
+       x = "Home Total",
+       y = "Gate Receipts") +
+  theme_minimal()
+
+p6 <- ggplot(hc_combined_dataset, aes(x = Gate_Receipts + PCT, y = Home_Total)) +
+  geom_point() +
+  geom_smooth(method = "lm", col = "green") +
+  labs(title = "Linear Regression: Home Total vs. Gate Receipts + PCT",
+       x = "Gate Receipts + PCT",
+       y = "Home Total") +
+  theme_minimal()
+
+p7 <- ggplot(hc_combined_dataset, aes(x = Home_Total + PCT, y = Gate_Receipts)) +
+  geom_point() +
+  geom_smooth(method = "lm", col = "green") +
+  labs(title = "Linear Regression: Gate Receipts vs. Home Total + PCT",
+       x = "Home Total + PCT",
+       y = "Gate Receipts") +
+  theme_minimal()
+
+p1
+p2
+p3
+p4
+p5
+p6
+p7
+
+
+
+
+
+
+
+
+
+
+```
+
+```{r}
+
+
+hc_combined_dataset$pred1 <- predict(log_reg1, type = "response")
+hc_combined_dataset$pred2 <- predict(log_reg2, type = "response")
+hc_combined_dataset$pred3 <- predict(log_reg3, type = "response")
+
+p8 <- ggplot(hc_combined_dataset, aes(x = Home_Total, y = pred1)) +
+  geom_point(alpha = 0.3, color = "blue") +
+  #geom_smooth(method = "lm", col = "red") +
+  labs(title = "Logistic Regression: Home Win Loss vs. Home Total",
+       x = "Home Total",
+       y = "Predicted Probability of Home Win") +
+  theme_minimal()
+
+p9 <- ggplot(hc_combined_dataset, aes(x = Gate_Receipts, y = pred2)) +
+  geom_point(alpha = 0.3, color = "blue") +
+  #geom_smooth(method = "lm", col = "red") +
+  labs(title = "Logistic Regression: Home Win Loss vs. Gate Receipts",
+       x = "Gate Receipts",
+       y = "Predicted Probability of Home Win") +
+  theme_minimal()
+
+# Plot for log_reg3
+p10 <- ggplot(hc_combined_dataset, aes(x = Home_Total + Gate_Receipts, y = pred3)) +
+  geom_point(alpha = 0.3, color = "blue") +
+  #geom_smooth(method = "lm", col = "red") +
+  labs(title = "Logistic Regression: Home Win Loss vs. Home Total + Gate Receipts",
+       x = "Home Total + Gate Receipts",
+       y = "Predicted Probability of Home Win") +
+  theme_minimal()
+
+p8
+p9
+
+
+```
+```{r}
+hc_combined_dataset$rf_pred1 <- predict(rf1, hc_combined_dataset, type = "prob")[,2]
+hc_combined_dataset$rf_pred2 <- predict(rf2, hc_combined_dataset, type = "prob")[,2]
+
+p11 <- ggplot(hc_combined_dataset, aes(x = Home_Total, y = rf_pred1)) +
+  geom_point(alpha = 0.3, color = "blue") +
+  geom_smooth(method = "loess", col = "red") +
+  labs(title = "Random Forest: Home Win Loss vs. Home Total",
+       x = "Home Total",
+       y = "Predicted Probability of Home Win") +
+  theme_minimal()
+
+p12 <- ggplot(hc_combined_dataset, aes(x = Gate_Receipts, y = rf_pred2)) +
+  geom_point(alpha = 0.3, color = "blue") +
+  geom_smooth(method = "loess", col = "red") +
+  labs(title = "Random Forest: Home Win Loss vs. Gate Receipts",
+       x = "Gate Receipts",
+       y = "Predicted Probability of Home Win") +
+  theme_minimal()
+
+p11
+p12
+```
+```{r}
+conf_matrix_df <- as.data.frame(conf_matrix$table)
+names(conf_matrix_df) <- c("Prediction", "Reference", "Freq")
+
+p13 <- ggplot(data = conf_matrix_df, aes(x = Reference, y = Prediction)) +
+  geom_tile(aes(fill = Freq), color = "white") +
+  scale_fill_gradient(low = "lightgrey", high = "darkgrey") +
+  geom_text(aes(label = Freq), vjust = 1) +
+  labs(title = "Confusion Matrix Heatmap",
+       x = "Actual",
+       y = "Predicted") +
+  theme_minimal()
+
+p13
+```
+```{r}
+results <- data.frame(Actual = actual, Predicted = pred)
+
+p14 <- ggplot(results, aes(x = Actual, y = Predicted)) +
+  geom_point(color = "blue", alpha = 0.5) +
+  geom_abline(slope = 1, intercept = 0, color = "red", linetype = "dashed") +
+  labs(title = "Actual vs Predicted Home Win Percentage",
+       x = "Actual Home Win Percentage",
+       y = "Predicted Home Win Percentage") +
+  theme_minimal()
+
+
+p14
+```
+
