@@ -2,7 +2,9 @@
 title: "Home Court"
 author: "Collin Travasos"
 date: "`r Sys.Date()`"
-output: html_document
+output:
+  pdf_document: default
+  html_document: default
 ---
 
 ```{r setup, include=FALSE}
@@ -23,7 +25,6 @@ library(scales)
 library(xgboost)
 library(Metrics)
 library(randomForest)
-
 
 ```
 
@@ -467,7 +468,7 @@ v10
 
 ```
 
-moooooorrrreeeeeee
+more
 ```{r}
 
 
@@ -583,6 +584,7 @@ print(rf2)
 print(rf3)
 
 ```
+
 RF split data
 
 ```{r}
@@ -702,7 +704,7 @@ rmse_value
 
 
 
-GRAAAAAPPPHHHSSSSSS
+graphs
 
 ```{r}
 
@@ -839,15 +841,6 @@ p5
 p6
 p7
 
-
-
-
-
-
-
-
-
-
 ```
 
 ```{r}
@@ -887,6 +880,7 @@ p9
 
 
 ```
+
 ```{r}
 hc_combined_dataset$rf_pred1 <- predict(rf1, hc_combined_dataset, type = "prob")[,2]
 hc_combined_dataset$rf_pred2 <- predict(rf2, hc_combined_dataset, type = "prob")[,2]
@@ -910,6 +904,7 @@ p12 <- ggplot(hc_combined_dataset, aes(x = Gate_Receipts, y = rf_pred2)) +
 p11
 p12
 ```
+
 ```{r}
 conf_matrix_df <- as.data.frame(conf_matrix$table)
 names(conf_matrix_df) <- c("Prediction", "Reference", "Freq")
@@ -925,6 +920,7 @@ p13 <- ggplot(data = conf_matrix_df, aes(x = Reference, y = Prediction)) +
 
 p13
 ```
+
 ```{r}
 results <- data.frame(Actual = actual, Predicted = pred)
 
